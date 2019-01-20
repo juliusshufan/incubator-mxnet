@@ -431,9 +431,32 @@ template<typename OP, int req>
 struct op_with_req {
   typedef OP Operation;
 
+  /** add by ypx to use mkl op **/
+  template <typename SType, typename DType>
+  MSHADOW_XINLINE static bool Vector(SType size, DType pIn, DType pOut)
+  {
+    if (req[0] == kNullOp)
+      return false;
+    auto type_flag = pIn[0].type_flag_;
+    size_t input_size = pIn[0].Size();
+    // check if the req and datetype satisfied
+    if (req[0] == kWriteTo && mkl_func::check_size(input_size) && mkl_func::check_type(type_flag))
+    {
+      MSHADOW_SGL_DBL_TYPE_SWITCH(type_flag, DType, {
+        mkl_func::OP(input_size, inputs[0].dptr<DType>(), outputs[0].dptr<DType>());
+      });
+      return true;
+    }else{
+      // can not use mkl
+      return false;
+    }
+  }
+  /** add by ypx **/
+
   /*! \brief input is one tensor */
-  template<typename DType>
-  MSHADOW_XINLINE static void Map(index_t i, DType *out, const DType *in) {
+  template <typename DType>
+  MSHADOW_XINLINE static void Map(index_t i, DType *out, const DType *in)
+  {
     KERNEL_ASSIGN(out[i], req, OP::Map(in[i]));
   }
 
@@ -491,7 +514,7 @@ struct Kernel;
 /*!
  * \brief CPU Kernel launcher
  * \tparam OP Operator to launch
- */
+ */ 
 template<typename OP>
 struct Kernel<OP, cpu> {
   /*!
@@ -504,25 +527,34 @@ struct Kernel<OP, cpu> {
    */
   template<typename ...Args>
   inline static bool Launch(mshadow::Stream<cpu> *, const size_t N, Args... args) {
-#ifdef _OPENMP
-    const int omp_threads = engine::OpenMP::Get()->GetRecommendedOMPThreadCount();
-    if (omp_threads < 2) {
-      for (size_t i = 0; i < N; ++i) {
-        OP::Map(i, args...);
-      }
-    } else {
-      #pragma omp parallel for num_threads(omp_threads)
-      for (index_t i = 0; i < static_cast<index_t>(N); ++i) {
-        OP::Map(i, args...);
-      }
+
+    #if MSHADOW_USE_MKL == 1
+        if(OP::Vector(N, args...))  retrun true;
+        else goto WITH_OUT_MKL_MAP;
+    #else
+    WITH_OUT_MKL_MAP:
+    {
+      #ifdef _OPENMP
+        const int omp_threads = engine::OpenMP::Get()->GetRecommendedOMPThreadCount();
+        if (omp_threads < 2) {
+          for (size_t i = 0; i < N; ++i) {
+            OP::Map(i, args...);
+          }
+        } else {
+          #pragma omp parallel for num_threads(omp_threads)
+          for (index_t i = 0; i < static_cast<index_t>(N); ++i) {
+            OP::Map(i, args...);
+          }
+        }
+        #else
+        for (size_t i = 0; i < N; ++i) {
+          OP::Map(i, args...);
+        }
+        #endif
+        return true;
     }
-#else
-    for (size_t i = 0; i < N; ++i) {
-      OP::Map(i, args...);
-    }
-#endif
-    return true;
-  }
+  #endif
+}
 
   /*!
    * \brief Launch a generic CPU kernel with dynamic schedule. This is recommended
