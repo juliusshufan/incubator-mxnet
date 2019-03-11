@@ -431,26 +431,95 @@ template<typename OP, int req>
 struct op_with_req {
   typedef OP Operation;
 
+  inline static void ompLaunch(const size_t N, DType *out, const DType *in) {
+    #ifdef _OPENMP
+    const int omp_threads = engine::OpenMP::Get()->GetRecommendedOMPThreadCount();
+    if (omp_threads < 2) {
+      for (size_t i = 0; i < N; ++i) {
+        Map(i, out, in);
+      }
+    } else {
+      #pragma omp parallel for num_threads(omp_threads)
+      for (index_t i = 0; i < static_cast<index_t>(N); ++i) {
+        Map(i, out, in);
+      }
+    }
+    #else
+    for (size_t i = 0; i < N; ++i) {
+      Map(i, out, in);
+    }
+    #endif
+    return;
+  }
+
+  inline static void ompLaunch(const size_t N, DType *out, const DType *lhs, const DType *rhs) {
+    #ifdef _OPENMP
+    const int omp_threads = engine::OpenMP::Get()->GetRecommendedOMPThreadCount();
+    if (omp_threads < 2) {
+      for (size_t i = 0; i < N; ++i) {
+        Map(i, out, lhs, rhs);
+      }
+    } else {
+      #pragma omp parallel for num_threads(omp_threads)
+      for (index_t i = 0; i < static_cast<index_t>(N); ++i) {
+        Map(i, out, lhs, rhs);
+      }
+    }
+    #else
+    for (size_t i = 0; i < N; ++i) {
+      Map(i, out, lhs, rhs);
+    }
+    #endif
+    return;
+  }
+
   /** add by ypx to use mkl op **/
   template <typename SType, typename DType>
-  MSHADOW_XINLINE static bool Vector(SType size, DType pIn, DType pOut)
+  //MSHADOW_XINLINE static bool Vector(SType size, DType pIn, DType pOut)
+  MSHADOW_XINLINE static bool Vector(SType size, DType *out, DType *in)
   {
     if (req[0] == kNullOp)
       return false;
-    auto type_flag = pIn[0].type_flag_;
-    size_t input_size = pIn[0].Size();
+    auto type_flag = in[0]->type_flag_;
+    size_t input_size = in[0]->Size();
     // check if the req and datetype satisfied
     if (req[0] == kWriteTo && mkl_func::check_size(input_size) && mkl_func::check_type(type_flag))
     {
       MSHADOW_SGL_DBL_TYPE_SWITCH(type_flag, DType, {
-        mkl_func::OP(input_size, inputs[0].dptr<DType>(), outputs[0].dptr<DType>());
+        mkl_func::OP(input_size, in[0]->dptr<DType>(), out[0]->dptr<DType>());
       });
       return true;
     }else{
-      // can not use mkl
-      return false;
+      // can not use mkl, fallback
+      ompLaunch(size, out, In);
+      return true;
     }
   }
+
+
+  template <typename SType, typename DType>
+  MSHADOW_XINLINE static bool Vector(SType size, DType *out, DType *lhs, DType *rhs)
+  {
+    ompLaunch(size, out, lhs, rhs);
+    return true;
+    #if 0
+    if (req[0] == kNullOp)
+      return false;
+    auto type_flag = in[0]->type_flag_;
+    size_t input_size = in[0]->Size();
+    if (req[0] == kWriteTo && mkl_func::check_size(input_size) && mkl_func::check_type(type_flag))
+    {
+      MSHADOW_SGL_DBL_TYPE_SWITCH(type_flag, DType, {
+        mkl_func::OP(input_size, in[0]->dptr<DType>(), out[0]->dptr<DType>());
+      });
+      return true;
+    }else{
+      ompLaunch(size, pout, pIn);
+      return true;
+    }
+    #endif
+  }
+
   /** add by ypx **/
 
   /*! \brief input is one tensor */
@@ -506,7 +575,43 @@ struct op_with_req {
                                   const DType *input_3) {
     KERNEL_ASSIGN(out[i], req, OP::Map(input_1[i], input_2[i], input_3[i]));
   }
+
+  /*! \brief input is one tensor */
+  template <typename DType>
+  MSHADOW_XINLINE static void Vector(index_t i, DType *out, const DType *in)
+  {
+    KERNEL_ASSIGN(out[i], req, OP::Map(in[i]));
+  }
+
+  /*! \brief inputs are two tensors */
+  template<typename DType>
+  MSHADOW_XINLINE static void Vector(index_t i, DType *out, const DType *lhs, const DType *rhs) {
+    KERNEL_ASSIGN(out[i], req, OP::Map(lhs[i], rhs[i]));
+  }
+
 };
+
+template<typename OP, typename ...Args>
+static void ompLaunch(mshadow::Stream<cpu> *, const size_t N, Args... args) {
+  #ifdef _OPENMP
+  const int omp_threads = engine::OpenMP::Get()->GetRecommendedOMPThreadCount();
+  if (omp_threads < 2) {
+    for (size_t i = 0; i < N; ++i) {
+      OP::Map(i, args...);
+    }
+  } else {
+    #pragma omp parallel for num_threads(omp_threads)
+    for (index_t i = 0; i < static_cast<index_t>(N); ++i) {
+      OP::Map(i, args...);
+    }
+  }
+  #else
+  for (size_t i = 0; i < N; ++i) {
+    OP::Map(i, args...);
+  }
+  #endif
+  return;
+}
 
 template<typename OP, typename xpu>
 struct Kernel;
