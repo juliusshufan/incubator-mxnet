@@ -591,28 +591,6 @@ struct op_with_req {
 
 };
 
-template<typename OP, typename ...Args>
-static void ompLaunch(mshadow::Stream<cpu> *, const size_t N, Args... args) {
-  #ifdef _OPENMP
-  const int omp_threads = engine::OpenMP::Get()->GetRecommendedOMPThreadCount();
-  if (omp_threads < 2) {
-    for (size_t i = 0; i < N; ++i) {
-      OP::Map(i, args...);
-    }
-  } else {
-    #pragma omp parallel for num_threads(omp_threads)
-    for (index_t i = 0; i < static_cast<index_t>(N); ++i) {
-      OP::Map(i, args...);
-    }
-  }
-  #else
-  for (size_t i = 0; i < N; ++i) {
-    OP::Map(i, args...);
-  }
-  #endif
-  return;
-}
-
 template<typename OP, typename xpu>
 struct Kernel;
 
